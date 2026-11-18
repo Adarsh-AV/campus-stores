@@ -107,6 +107,7 @@
     selected: "",
     filter: "All items",
     draft: blankDraft(),
+    stillOut: 0,
     loans: [
       {
         num: 401,
@@ -270,15 +271,76 @@
       .slice()
       .reverse();
     if (!shown.length) html += "<p>No outstanding slips.</p>";
-    for (const l of shown)
-      html += row(
-        "L-" + l.num + " · " + l.asset,
-        l.req + " · " + l.who + " · Due " + l.due,
-        l.back
-          ? badge("Returned")
-          : btn("Record return", "return", String(l.num)),
-      );
+    for (const l of shown) html += slipRow(l);
     return html;
+  }
+  // A slip shows where the unit actually is when it did not come back with
+  // the rest of the kit, not only who signed for it.
+  function slipRow(l) {
+    const a = getAsset(l.asset);
+    const where = l.holder
+      ? '<small class="holder"><b>Now with ' +
+        esc(l.holder) +
+        " · back " +
+        esc(l.expect) +
+        "</b>" +
+        (l.memo ? " · " + esc(l.memo) : "") +
+        "</small>"
+      : "";
+    const actions = l.back
+      ? badge("Returned")
+      : '<div class="slipactions">' +
+        (s.stillOut === l.num ? "" : btn("Still out", "stillout", String(l.num))) +
+        btn("Record return", "return", String(l.num)) +
+        "</div>";
+    let html =
+      '<div class="row"><div><strong>' +
+      esc("L-" + l.num + " · " + l.asset + " · " + a.type) +
+      "</strong><small>" +
+      esc(l.req + " · Signed out to " + l.who + " · Due " + l.due) +
+      "</small>" +
+      where +
+      "</div><div>" +
+      actions +
+      "</div></div>";
+    if (s.stillOut === l.num && !l.back) html += stillOutForm(l);
+    return html;
+  }
+  function stillOutForm(l) {
+    const select = (label, key, options, value) =>
+      "<label><span>" +
+      label +
+      '</span><select name="' +
+      key +
+      '" required><option value="">Select…</option>' +
+      opts(options, value) +
+      "</select></label>";
+    return (
+      '<form class="slipform" data-stillout data-num="' +
+      l.num +
+      '"><p><b>' +
+      esc(l.asset) +
+      " did not come back.</b> Record where it is so the next shift can close this slip.</p>" +
+      '<div class="form">' +
+      select(
+        "Who has it now",
+        "holder",
+        people.map((p) => [p, p]),
+        l.holder || "",
+      ) +
+      select(
+        "Coming back",
+        "expect",
+        dueTimes.map((t) => [t, t]),
+        l.expect || "",
+      ) +
+      '<label class="full"><span>Note (optional)</span><input name="memo" maxlength="200" value="' +
+      esc(l.memo || "") +
+      '" placeholder="e.g. Kabir says Leela will drop it at the counter" /></label>' +
+      '</div><div class="buttons"><button type="submit" class="primary">Save on slip</button>' +
+      btn("Cancel", "cancelstillout") +
+      "</div></form>"
+    );
   }
   // One form per approved request: every approved item gets its own unit
   // picker, and saving still writes one slip per physical unit.
@@ -391,6 +453,21 @@
         "Kabir Sen · Film Society",
         "I brought the projector and speaker. Leela Das has our adapter. She’ll be at the counter at 9 am tomorrow.",
       ]);
+    for (const l of s.loans)
+      if (l.holder && !l.back)
+        entries.push([
+          shifts[l.noted].time,
+          "Loan register · Slip L-" + l.num,
+          l.asset +
+            " (" +
+            getAsset(l.asset).type +
+            ") is still out with " +
+            l.holder +
+            ", back " +
+            l.expect +
+            "." +
+            (l.memo ? " " + l.memo : ""),
+        ]);
     for (const n of s.notes)
       entries.push([shifts[n.phase].time, "Counter handover", n.text]);
     for (const [t, author, body] of entries.slice().reverse())
@@ -465,6 +542,13 @@
         s.tab = v;
         s.editing = false;
         s.draft = blankDraft();
+        s.stillOut = 0;
+        break;
+      case "stillout":
+        s.stillOut = Number(v);
+        break;
+      case "cancelstillout":
+        s.stillOut = 0;
         break;
       case "issuekit":
         s.tab = "Loan register";
@@ -493,7 +577,29 @@
         const l = s.loans.find((l) => l.num === Number(v));
         if (!l || l.back) return;
         l.back = true;
-        s.notice = l.asset + " returned to stock. Slip L-" + l.num + " closed.";
+        if (s.stillOut === l.num) s.stillOut = 0;
+        const left = s.loans.filter((x) => x.req === l.req && !x.back);
+        s.notice =
+          l.asset +
+          " returned to stock. Slip L-" +
+          l.num +
+          " closed." +
+          (left.length
+            ? " Still out on " +
+              l.req +
+              ": " +
+              left
+                .map(
+                  (x) =>
+                    x.asset +
+                    " (" +
+                    getAsset(x.asset).type +
+                    (x.holder ? ", with " + x.holder : "") +
+                    ")",
+                )
+                .join(", ") +
+              "."
+            : " Everything on " + l.req + " is back.");
         break;
       }
     }
@@ -522,6 +628,30 @@
     e.preventDefault();
     const f = e.target;
     const form = new FormData(f);
+    if (f.matches("[data-stillout]")) {
+      const l = s.loans.find((x) => x.num === Number(f.dataset.num));
+      const holder = String(form.get("holder") || "");
+      const expect = String(form.get("expect") || "");
+      if (!l || l.back || !people.includes(holder) || !dueTimes.includes(expect))
+        return;
+      l.holder = holder;
+      l.expect = expect;
+      l.memo = String(form.get("memo") || "").trim().slice(0, 200);
+      l.noted = s.phase;
+      s.stillOut = 0;
+      commit(
+        "Slip L-" +
+          l.num +
+          " updated: " +
+          l.asset +
+          " is with " +
+          holder +
+          ", back " +
+          expect +
+          ". Added to the desk book.",
+      );
+      return;
+    }
     if (f.matches("[data-note]")) {
       const text = String(form.get("note")).trim();
       if (!text) return;
@@ -593,7 +723,15 @@
       !d.loans.length ||
       !d.loans.every(
         (l) =>
-          l && getReq(l.req) && getAsset(l.asset) && Number.isInteger(l.num),
+          l &&
+          getReq(l.req) &&
+          getAsset(l.asset) &&
+          Number.isInteger(l.num) &&
+          (!l.holder ||
+            (people.includes(l.holder) &&
+              dueTimes.includes(l.expect) &&
+              shifts[l.noted] &&
+              typeof (l.memo || "") === "string")),
       )
     )
       return;
@@ -603,6 +741,7 @@
       loans: d.loans.map((l) => ({ ...l })),
       notes: d.notes.map((n) => ({ ...n })),
       draft: blankDraft(),
+      stillOut: 0,
     };
     paint();
   }

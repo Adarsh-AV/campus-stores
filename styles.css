@@ -325,6 +325,28 @@ body > main {
 #campus-stores .kitline span:first-child {
   margin: 0;
 }
+#campus-stores .row small.holder {
+  margin-top: 3px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--memo);
+  color: var(--memotxt);
+}
+#campus-stores .slipactions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+#campus-stores .slipform {
+  margin: 0 0 10px;
+  padding: 11px 12px;
+  background: var(--desk);
+  border-left: 3px solid var(--mark);
+}
+#campus-stores .slipform .buttons {
+  margin: 0;
+}
 #campus-stores .formerror {
   margin: 0 0 10px;
   padding: 7px 10px;
