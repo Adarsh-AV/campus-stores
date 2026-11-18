@@ -83,18 +83,30 @@
       text: "You’ve just taken over. Leela walks in with an adapter. Work out what was outstanding from the screening and close the loan for the right item.",
     },
   ];
+  const getAsset = (id) => assets.find((x) => x.id === id);
+  const getReq = (id) => requests.find((x) => x.id === id);
   const pages = [
     ["Requests", "clipboard-list"],
     ["Inventory", "package"],
     ["Loan register", "book-open"],
     ["Desk book", "messages-square"],
   ];
+  const dueTimes = ["Fri 8 pm", "Sat 9 am", "Sat 10 am", "Sat noon"];
+  // Working copy of the "Issue kit" form, so a repaint keeps what was chosen.
+  const blankDraft = (req = "") => ({
+    req,
+    who: "",
+    due: getReq(req) ? getReq(req).due : "",
+    units: {},
+    error: "",
+  });
   const original = () => ({
     version: 1,
     tab: "Requests",
     phase: 0,
     selected: "",
     filter: "All items",
+    draft: blankDraft(),
     loans: [
       {
         num: 401,
@@ -111,8 +123,6 @@
     notice: "Sample shift · All records are fictional.",
   });
   let s = original();
-  const getAsset = (id) => assets.find((x) => x.id === id);
-  const getReq = (id) => requests.find((x) => x.id === id);
   const out = (id) => s.loans.find((l) => l.asset === id && !l.back);
   const esc = (x) =>
     String(x).replace(
@@ -126,9 +136,18 @@
           "'": "&#39;",
         })[c],
     );
-  const opts = (list) =>
+  const opts = (list, selected = "") =>
     list
-      .map(([v, t]) => '<option value="' + esc(v) + '">' + esc(t) + "</option>")
+      .map(
+        ([v, t]) =>
+          '<option value="' +
+          esc(v) +
+          '"' +
+          (v === selected ? " selected" : "") +
+          ">" +
+          esc(t) +
+          "</option>",
+      )
       .join("");
   const btn = (label, act, val = "", style = "") =>
     '<button type="button" data-action="' +
@@ -181,7 +200,9 @@
         r.items.map((x) => "<li>" + x + "</li>").join("") +
         "</ul><p>" +
         r.note +
-        "</p></div>";
+        "</p>" +
+        btn("Issue this kit", "issuekit", r.id, "primary") +
+        "</div>";
     } else
       html += requests
         .map((r) =>
@@ -226,44 +247,9 @@
       "One slip per physical unit",
       s.editing
         ? btn("Cancel", "cancel")
-        : btn("New issue slip", "new", "", "primary"),
+        : btn("Issue kit", "new", "", "primary"),
     );
-    if (s.editing) {
-      const available = assets.filter((a) => !a.repair && !out(a.id));
-      const select = (label, key, options) =>
-        "<label><span>" +
-        label +
-        '</span><select name="' +
-        key +
-        '" required><option value="">Select…</option>' +
-        opts(options) +
-        "</select></label>";
-      return (
-        html +
-        '<form data-issue><div class="form">' +
-        select(
-          "Approved request",
-          "req",
-          requests.map((r) => [r.id, r.id + " · " + r.club]),
-        ) +
-        select(
-          "Unit leaving the desk",
-          "asset",
-          available.map((a) => [a.id, a.id + " · " + a.type]),
-        ) +
-        select(
-          "Collected by",
-          "who",
-          people.map((p) => [p, p]),
-        ) +
-        select(
-          "Return by",
-          "due",
-          ["Fri 8 pm", "Sat 9 am", "Sat 10 am", "Sat noon"].map((d) => [d, d]),
-        ) +
-        '</div><button type="submit" class="primary">Save issue slip</button></form>'
-      );
-    }
+    if (s.editing) return html + issueForm();
     html +=
       '<div class="buttons">' +
       ["Outstanding", "All slips"]
@@ -292,6 +278,94 @@
           ? badge("Returned")
           : btn("Record return", "return", String(l.num)),
       );
+    return html;
+  }
+  // One form per approved request: every approved item gets its own unit
+  // picker, and saving still writes one slip per physical unit.
+  function issueForm() {
+    const d = s.draft;
+    const r = getReq(d.req);
+    const select = (label, key, options, value, cls = "") =>
+      '<label class="' +
+      cls +
+      '"><span>' +
+      label +
+      '</span><select name="' +
+      key +
+      '" required><option value="">Select…</option>' +
+      opts(options, value) +
+      "</select></label>";
+    let html =
+      '<form data-issue><div class="form">' +
+      select(
+        "Approved request",
+        "req",
+        requests.map((x) => [x.id, x.id + " · " + x.club + " · " + x.event]),
+        d.req,
+        "full",
+      );
+    if (!r)
+      return (
+        html +
+        '<p class="full muted">Choose a request to see its approved equipment.</p></div></form>'
+      );
+    html +=
+      '<div class="kit full"><p><b>Approved equipment</b> · Filed by ' +
+      esc(r.owner) +
+      "</p><p class=\"muted\">" +
+      esc(r.note) +
+      "</p>";
+    r.items.forEach((type, i) => {
+      const already = s.loans.find(
+        (l) => l.req === r.id && !l.back && getAsset(l.asset).type === type,
+      );
+      if (already) {
+        html +=
+          '<div class="kitline"><span>' +
+          esc(type) +
+          "</span>" +
+          badge("Already out · L-" + already.num + " · " + already.asset) +
+          "</div>";
+        return;
+      }
+      const units = assets.filter(
+        (a) => a.type === type && !a.repair && !out(a.id),
+      );
+      html +=
+        '<label class="kitline"><span>' +
+        esc(type) +
+        '</span><select name="unit-' +
+        i +
+        '" required><option value="">' +
+        (units.length ? "Select unit…" : "No unit on the shelf") +
+        "</option>" +
+        opts(
+          units.map((a) => [a.id, a.id + " · " + a.model + " · bin " + a.bin]),
+          d.units[type],
+        ) +
+        '<option value="none"' +
+        (d.units[type] === "none" ? " selected" : "") +
+        ">Not issuing now</option></select></label>";
+    });
+    html +=
+      "</div>" +
+      select(
+        "Collected by",
+        "who",
+        people.map((p) => [p, p]),
+        d.who,
+      ) +
+      select(
+        "Return by",
+        "due",
+        dueTimes.map((t) => [t, t + (t === r.due ? " (on request)" : "")]),
+        d.due,
+      ) +
+      "</div>" +
+      (d.error
+        ? '<p class="formerror" role="alert">' + esc(d.error) + "</p>"
+        : "") +
+      '<button type="submit" class="primary">Save issue slips</button></form>';
     return html;
   }
   function deskbook() {
@@ -390,6 +464,13 @@
       case "tab":
         s.tab = v;
         s.editing = false;
+        s.draft = blankDraft();
+        break;
+      case "issuekit":
+        s.tab = "Loan register";
+        s.selected = "";
+        s.editing = true;
+        s.draft = blankDraft(v);
         break;
       case "close":
         s.selected = "";
@@ -399,9 +480,11 @@
         break;
       case "new":
         s.editing = true;
+        s.draft = blankDraft();
         break;
       case "cancel":
         s.editing = false;
+        s.draft = blankDraft();
         break;
       case "scope":
         s.onlyOpen = v === "0";
@@ -420,6 +503,19 @@
     if (e.target.matches("[data-filter]")) {
       s.filter = e.target.value;
       commit();
+      return;
+    }
+    if (!e.target.closest("[data-issue]")) return;
+    const { name, value } = e.target;
+    if (name === "req") {
+      // A new request swaps the kit list; keep the collector, reset the rest.
+      s.draft = { ...blankDraft(value), who: s.draft.who };
+      commit();
+    } else if (name === "who" || name === "due") {
+      s.draft[name] = value;
+    } else if (name.startsWith("unit-")) {
+      const r = getReq(s.draft.req);
+      if (r) s.draft.units[r.items[Number(name.slice(5))]] = value;
     }
   });
   root.addEventListener("submit", (e) => {
@@ -434,31 +530,53 @@
       return;
     }
     if (!f.matches("[data-issue]")) return;
-    const [req, asset, who, due] = ["req", "asset", "who", "due"].map((k) =>
-      form.get(k),
-    );
-    const unit = getAsset(asset),
-      r = getReq(req);
-    if (!r || !unit || unit.repair || out(asset) || !people.includes(who))
-      return;
-    if (!r.items.includes(unit.type)) {
-      q("[data-status]").textContent =
-        "This equipment type is outside the approved request. Choose an approved unit.";
-      return;
-    }
-    if (
-      s.loans.some(
-        (l) => l.req === req && !l.back && getAsset(l.asset).type === unit.type,
+    const r = getReq(form.get("req"));
+    if (!r) return;
+    const who = String(form.get("who") || "");
+    const due = String(form.get("due") || "");
+    // Only approved types are offered, so each pick is [approved type, unit].
+    const picks = r.items.map((type, i) => [type, form.get("unit-" + i)]);
+    s.draft = { req: r.id, who, due, units: {}, error: "" };
+    for (const [type, id] of picks) if (id) s.draft.units[type] = id;
+    const fail = (msg) => {
+      s.draft.error = msg;
+      commit();
+    };
+    if (!people.includes(who)) return fail("Choose who is collecting.");
+    if (!dueTimes.includes(due)) return fail("Choose a return time.");
+    const issuing = picks.filter(([, id]) => id && id !== "none");
+    if (!issuing.length)
+      return fail("Choose at least one unit to issue, or cancel.");
+    for (const [type, id] of issuing) {
+      const a = getAsset(id);
+      if (!a || a.type !== type || a.repair || out(id))
+        return fail(id + " is not available as a " + type + ".");
+      if (
+        s.loans.some(
+          (l) => l.req === r.id && !l.back && getAsset(l.asset).type === type,
+        )
       )
-    ) {
-      q("[data-status]").textContent =
-        "The approved quantity of this equipment type is already on loan.";
-      return;
+        return fail("The approved " + type + " is already on loan.");
     }
-    const num = Math.max(...s.loans.map((l) => l.num)) + 1;
-    s.loans.push({ num, req, asset, who, due, back: false });
+    let num = Math.max(...s.loans.map((l) => l.num));
+    const slips = issuing.map(([, asset]) => {
+      num += 1;
+      s.loans.push({ num, req: r.id, asset, who, due, back: false });
+      return asset + " (L-" + num + ")";
+    });
+    const skipped = picks.filter(([, id]) => id === "none").map(([t]) => t);
     s.editing = false;
-    commit("Issued " + asset + " to " + who + " on slip L-" + num + ".");
+    s.draft = blankDraft();
+    commit(
+      "Issued " +
+        slips.join(", ") +
+        " to " +
+        who +
+        " · Return by " +
+        due +
+        "." +
+        (skipped.length ? " Not issued: " + skipped.join(", ") + "." : ""),
+    );
   });
   function restore(d) {
     if (
@@ -484,6 +602,7 @@
       ...d,
       loans: d.loans.map((l) => ({ ...l })),
       notes: d.notes.map((n) => ({ ...n })),
+      draft: blankDraft(),
     };
     paint();
   }

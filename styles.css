@@ -309,6 +309,35 @@ body > main {
 #campus-stores textarea {
   resize: vertical;
 }
+#campus-stores .kit {
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  background: var(--desk);
+  border-left: 3px solid var(--sel);
+}
+#campus-stores .kitline {
+  display: grid;
+  grid-template-columns: minmax(0, 14em) minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 10px;
+}
+#campus-stores .kitline span:first-child {
+  margin: 0;
+}
+#campus-stores .formerror {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--memo);
+  color: var(--mark);
+  font-weight: 600;
+}
+@container (max-width:420px) {
+  #campus-stores .kitline {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 #campus-stores .statusbar {
   background: var(--desk);
   border-top: 1px solid var(--line);
