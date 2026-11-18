@@ -332,6 +332,38 @@ body > main {
   background: var(--memo);
   color: var(--memotxt);
 }
+#campus-stores .when {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 3px 0 1px;
+}
+#campus-stores .tag.late {
+  background: var(--mark);
+  color: var(--inv);
+  font-weight: 600;
+}
+#campus-stores .tag.soon {
+  background: var(--memo);
+  color: var(--memotxt);
+  font-weight: 600;
+}
+#campus-stores .lookup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+#campus-stores .lookup label {
+  flex: 1 1 220px;
+}
+#campus-stores .lookup input {
+  width: 100%;
+  font-weight: 400;
+}
 #campus-stores .slipactions {
   display: flex;
   flex-wrap: wrap;

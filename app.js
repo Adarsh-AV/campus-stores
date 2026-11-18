@@ -92,6 +92,19 @@
     ["Desk book", "messages-square"],
   ];
   const dueTimes = ["Fri 8 pm", "Sat 9 am", "Sat 10 am", "Sat noon"];
+  // Minutes from Friday midnight, so slips can be compared with desk time.
+  const dueAt = {
+    "Fri 8 pm": 20 * 60,
+    "Sat 9 am": 33 * 60,
+    "Sat 10 am": 34 * 60,
+    "Sat noon": 36 * 60,
+  };
+  const phaseAt = [15 * 60 + 45, 19 * 60 + 30, 33 * 60];
+  const tagOf = (x) =>
+    String(x || "")
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, "");
   // Working copy of the "Issue kit" form, so a repaint keeps what was chosen.
   const blankDraft = (req = "") => ({
     req,
@@ -100,6 +113,15 @@
     units: {},
     error: "",
   });
+  // Transient slip-panel state: which slip has a form open and its messages.
+  const idleReturn = () => ({
+    stillOut: 0,
+    returning: 0,
+    retTag: "",
+    retError: "",
+    lookup: "",
+    lookupMsg: "",
+  });
   const original = () => ({
     version: 1,
     tab: "Requests",
@@ -107,7 +129,7 @@
     selected: "",
     filter: "All items",
     draft: blankDraft(),
-    stillOut: 0,
+    ...idleReturn(),
     loans: [
       {
         num: 401,
@@ -177,7 +199,37 @@
     right +
     "</div></div>";
   const badge = (t, good = false) =>
-    '<span class="tag' + (good ? " good" : "") + '">' + esc(t) + "</span>";
+    '<span class="tag' +
+    (good === true ? " good" : good ? " " + good : "") +
+    '">' +
+    esc(t) +
+    "</span>";
+  // Where an open slip stands against the desk clock.
+  function timing(l) {
+    const now = phaseAt[s.phase];
+    const due = dueAt[l.due];
+    const expect = l.expect ? dueAt[l.expect] : due;
+    if (now > due) {
+      const late = ["Overdue since " + l.due, "late"];
+      if (!l.expect || expect === due) return { rank: 0, at: due, tags: [late] };
+      if (now >= expect)
+        return {
+          rank: 0,
+          at: expect,
+          tags: [late, [expect === now ? "Expected now" : "Promised " + l.expect, "soon"]],
+        };
+      return { rank: 1, at: expect, tags: [late, ["Promised " + l.expect, ""]] };
+    }
+    const gap = expect - now;
+    const left = gap < 60 ? gap + " min" : Math.round(gap / 60) + " hr";
+    if (gap <= 120)
+      return {
+        rank: 1,
+        at: expect,
+        tags: [[gap === 0 ? "Expected now" : "Due in " + left, "soon"]],
+      };
+    return { rank: 2, at: expect, tags: [] };
+  }
   function requestPage() {
     let html = head(
       "Approved requests",
@@ -252,6 +304,13 @@
     );
     if (s.editing) return html + issueForm();
     html +=
+      '<form class="lookup" data-lookup><label><span>Unit in hand</span><input name="tag" autocomplete="off" required placeholder="Type the tag on the unit, e.g. AD-12" value="' +
+      esc(s.lookup) +
+      '" /></label><button type="submit">Find slip</button></form>' +
+      (s.lookupMsg
+        ? '<p class="formerror" role="alert">' + esc(s.lookupMsg) + "</p>"
+        : "");
+    html +=
       '<div class="buttons">' +
       ["Outstanding", "All slips"]
         .map(
@@ -266,10 +325,16 @@
         )
         .join("") +
       "</div>";
-    const shown = s.loans
-      .filter((l) => !s.onlyOpen || !l.back)
-      .slice()
-      .reverse();
+    // Most urgent first: overdue or expected now, then by when it's due.
+    const open = s.loans
+      .filter((l) => !l.back)
+      .map((l) => [l, timing(l)])
+      .sort(([a, x], [b, y]) => x.rank - y.rank || x.at - y.at || b.num - a.num)
+      .map(([l]) => l);
+    const done = s.onlyOpen
+      ? []
+      : s.loans.filter((l) => l.back).slice().reverse();
+    const shown = [...open, ...done];
     if (!shown.length) html += "<p>No outstanding slips.</p>";
     for (const l of shown) html += slipRow(l);
     return html;
@@ -287,24 +352,99 @@
         (l.memo ? " · " + esc(l.memo) : "") +
         "</small>"
       : "";
+    const busy = s.stillOut === l.num || s.returning === l.num;
     const actions = l.back
       ? badge("Returned")
-      : '<div class="slipactions">' +
-        (s.stillOut === l.num ? "" : btn("Still out", "stillout", String(l.num))) +
-        btn("Record return", "return", String(l.num)) +
-        "</div>";
+      : busy
+        ? ""
+        : '<div class="slipactions">' +
+          btn("Still out", "stillout", String(l.num)) +
+          btn("Record return", "return", String(l.num)) +
+          "</div>";
+    const tags = l.back
+      ? ""
+      : timing(l)
+          .tags.map(([t, cls]) => badge(t, cls))
+          .join(" ");
+    const closed =
+      l.back && l.returnedBy
+        ? "<small>Returned by " +
+          esc(l.returnedBy) +
+          " · " +
+          esc(shifts[l.returnedAt].time) +
+          "</small>"
+        : "";
     let html =
       '<div class="row"><div><strong>' +
       esc("L-" + l.num + " · " + l.asset + " · " + a.type) +
-      "</strong><small>" +
+      "</strong>" +
+      (tags ? '<div class="when">' + tags + "</div>" : "") +
+      "<small>" +
       esc(l.req + " · Signed out to " + l.who + " · Due " + l.due) +
       "</small>" +
-      where +
+      (l.back ? closed : where) +
       "</div><div>" +
       actions +
       "</div></div>";
-    if (s.stillOut === l.num && !l.back) html += stillOutForm(l);
+    if (l.back) return html;
+    if (s.stillOut === l.num) html += stillOutForm(l);
+    if (s.returning === l.num) html += returnForm(l);
     return html;
+  }
+  // Closing a slip asks for the tag on the unit in hand, so an identical
+  // unit (AD-12 vs AD-15) can't close the wrong slip.
+  function returnForm(l) {
+    return (
+      '<form class="slipform" data-return data-num="' +
+      l.num +
+      '"><p><b>Check in L-' +
+      l.num +
+      " · " +
+      esc(l.asset) +
+      " · " +
+      esc(getAsset(l.asset).type) +
+      ".</b> Read the tag on the unit before closing the slip.</p>" +
+      '<div class="form"><label><span>Tag on the unit in hand</span><input name="tag" autocomplete="off" required placeholder="' +
+      esc(l.asset.slice(0, 3)) +
+      '…" value="' +
+      esc(s.retTag) +
+      '" /></label><label><span>Returned by</span><select name="by" required>' +
+      opts(
+        people.map((p) => [p, p]),
+        l.holder || l.who,
+      ) +
+      "</select></label></div>" +
+      (s.retError
+        ? '<p class="formerror" role="alert">' + esc(s.retError) + "</p>"
+        : "") +
+      '<div class="buttons"><button type="submit" class="primary">Close slip</button>' +
+      btn("Cancel", "cancelreturn") +
+      "</div></form>"
+    );
+  }
+  // Explains where a tag belongs when it is not the slip being closed.
+  function whereIs(tag) {
+    const a = getAsset(tag);
+    if (!a) return "No unit is tagged " + tag + ". Check the label on the unit.";
+    const l = out(tag);
+    if (l)
+      return (
+        tag +
+        " is on slip L-" +
+        l.num +
+        " (" +
+        l.req +
+        ", signed out to " +
+        l.who +
+        ")."
+      );
+    if (a.repair) return tag + " is a workshop unit in repair, not on loan.";
+    return (
+      tag +
+      " is not on loan. It should already be on the shelf in bin " +
+      a.bin +
+      ". Check you have the right unit."
+    );
   }
   function stillOutForm(l) {
     const select = (label, key, options, value) =>
@@ -542,13 +682,14 @@
         s.tab = v;
         s.editing = false;
         s.draft = blankDraft();
-        s.stillOut = 0;
+        Object.assign(s, idleReturn());
         break;
       case "stillout":
-        s.stillOut = Number(v);
+        Object.assign(s, idleReturn(), { stillOut: Number(v) });
         break;
       case "cancelstillout":
-        s.stillOut = 0;
+      case "cancelreturn":
+        Object.assign(s, idleReturn());
         break;
       case "issuekit":
         s.tab = "Loan register";
@@ -576,35 +717,45 @@
       case "return": {
         const l = s.loans.find((l) => l.num === Number(v));
         if (!l || l.back) return;
-        l.back = true;
-        if (s.stillOut === l.num) s.stillOut = 0;
-        const left = s.loans.filter((x) => x.req === l.req && !x.back);
-        s.notice =
-          l.asset +
-          " returned to stock. Slip L-" +
-          l.num +
-          " closed." +
-          (left.length
-            ? " Still out on " +
-              l.req +
-              ": " +
-              left
-                .map(
-                  (x) =>
-                    x.asset +
-                    " (" +
-                    getAsset(x.asset).type +
-                    (x.holder ? ", with " + x.holder : "") +
-                    ")",
-                )
-                .join(", ") +
-              "."
-            : " Everything on " + l.req + " is back.");
+        Object.assign(s, idleReturn(), { returning: l.num });
         break;
       }
     }
     commit();
   });
+  function closeSlip(l, by) {
+    l.back = true;
+    l.returnedBy = by;
+    l.returnedAt = s.phase;
+    Object.assign(s, idleReturn());
+    const left = s.loans.filter((x) => x.req === l.req && !x.back);
+    commit(
+      l.asset +
+        " returned by " +
+        by +
+        " to bin " +
+        getAsset(l.asset).bin +
+        ". Slip L-" +
+        l.num +
+        " closed." +
+        (left.length
+          ? " Still out on " +
+            l.req +
+            ": " +
+            left
+              .map(
+                (x) =>
+                  x.asset +
+                  " (" +
+                  getAsset(x.asset).type +
+                  (x.holder ? ", with " + x.holder : "") +
+                  ")",
+              )
+              .join(", ") +
+            "."
+          : " Everything on " + l.req + " is back."),
+    );
+  }
   root.addEventListener("change", (e) => {
     if (e.target.matches("[data-filter]")) {
       s.filter = e.target.value;
@@ -628,6 +779,44 @@
     e.preventDefault();
     const f = e.target;
     const form = new FormData(f);
+    if (f.matches("[data-lookup]")) {
+      const tag = tagOf(form.get("tag"));
+      if (!tag) return;
+      const l = out(tag);
+      Object.assign(s, idleReturn(), { lookup: tag });
+      if (l) {
+        s.returning = l.num;
+        s.retTag = tag;
+        commit(
+          tag + " is on slip L-" + l.num + ". Confirm who returned it and close the slip.",
+        );
+      } else {
+        s.lookupMsg = whereIs(tag);
+        commit();
+      }
+      return;
+    }
+    if (f.matches("[data-return]")) {
+      const l = s.loans.find((x) => x.num === Number(f.dataset.num));
+      const by = String(form.get("by") || "");
+      if (!l || l.back || !people.includes(by)) return;
+      const tag = tagOf(form.get("tag"));
+      s.retTag = tag;
+      if (tag !== l.asset) {
+        s.retError =
+          "This slip is for " +
+          l.asset +
+          ", but the unit in hand is " +
+          tag +
+          ". " +
+          whereIs(tag) +
+          " The slip stays open.";
+        commit();
+        return;
+      }
+      closeSlip(l, by);
+      return;
+    }
     if (f.matches("[data-stillout]")) {
       const l = s.loans.find((x) => x.num === Number(f.dataset.num));
       const holder = String(form.get("holder") || "");
@@ -638,7 +827,7 @@
       l.expect = expect;
       l.memo = String(form.get("memo") || "").trim().slice(0, 200);
       l.noted = s.phase;
-      s.stillOut = 0;
+      Object.assign(s, idleReturn());
       commit(
         "Slip L-" +
           l.num +
@@ -731,7 +920,9 @@
             (people.includes(l.holder) &&
               dueTimes.includes(l.expect) &&
               shifts[l.noted] &&
-              typeof (l.memo || "") === "string")),
+              typeof (l.memo || "") === "string")) &&
+          (!l.returnedBy ||
+            (people.includes(l.returnedBy) && shifts[l.returnedAt])),
       )
     )
       return;
@@ -741,7 +932,7 @@
       loans: d.loans.map((l) => ({ ...l })),
       notes: d.notes.map((n) => ({ ...n })),
       draft: blankDraft(),
-      stillOut: 0,
+      ...idleReturn(),
     };
     paint();
   }
